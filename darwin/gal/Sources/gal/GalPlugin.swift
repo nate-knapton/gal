@@ -81,6 +81,7 @@ public class GalPlugin: NSObject, FlutterPlugin {
     writeContent(
       assetChangeRequest: {
         let request = PHAssetCreationRequest.forAsset()
+        request.creationDate = Date() //Modify date to current date to ensure latest in gallery
         let options = PHAssetResourceCreationOptions()
         options.originalFilename = name
         request.addResource(with: .photo, data: bytes, options: options)

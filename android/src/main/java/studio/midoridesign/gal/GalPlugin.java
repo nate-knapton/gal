@@ -186,6 +186,12 @@ public class GalPlugin implements FlutterPlugin, MethodCallHandler, ActivityAwar
             values.put(isImage ? MediaStore.Images.Media.RELATIVE_PATH
                     : MediaStore.Video.Media.RELATIVE_PATH, path);
         }
+
+        //Added to ensure the media shows up with the current date (latest in gallery)
+        values.put(MediaStore.MediaColumns.DATE_ADDED, System.currentTimeMillis() / 1000);
+        values.put(MediaStore.MediaColumns.DATE_TAKEN, System.currentTimeMillis() / 1000);
+        values.put(MediaStore.MediaColumns.DATE_MODIFIED, System.currentTimeMillis() / 1000);
+
         values.put(MediaStore.MediaColumns.DISPLAY_NAME, name + extension);
         return values;
     }
