@@ -188,8 +188,8 @@ public class GalPlugin implements FlutterPlugin, MethodCallHandler, ActivityAwar
         }
 
         //Added to ensure the media shows up with the current date (latest in gallery)
+        values.put(MediaStore.MediaColumns.DATE_TAKEN, System.currentTimeMillis());
         values.put(MediaStore.MediaColumns.DATE_ADDED, System.currentTimeMillis() / 1000);
-        values.put(MediaStore.MediaColumns.DATE_TAKEN, System.currentTimeMillis() / 1000);
         values.put(MediaStore.MediaColumns.DATE_MODIFIED, System.currentTimeMillis() / 1000);
 
         values.put(MediaStore.MediaColumns.DISPLAY_NAME, name + extension);

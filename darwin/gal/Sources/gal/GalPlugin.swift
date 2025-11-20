@@ -1,20 +1,21 @@
 import Photos
 
 #if os(iOS)
-  import Flutter
-  import UIKit
+import Flutter
+import UIKit
 #else
-  import Cocoa
-  import FlutterMacOS
+import Cocoa
+import FlutterMacOS
 #endif
 
 public class GalPlugin: NSObject, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
     #if os(iOS)
-      let messenger = registrar.messenger()
+    let messenger = registrar.messenger()
     #else
-      let messenger = registrar.messenger
+    let messenger = registrar.messenger
     #endif
+
     let channel = FlutterMethodChannel(name: "gal", binaryMessenger: messenger)
     let instance = GalPlugin()
     registrar.addMethodCallDelegate(instance, channel: channel)
@@ -31,62 +32,78 @@ public class GalPlugin: NSObject, FlutterPlugin {
       ) { _, error in
         result(error == nil ? nil : self.handleError(error: error!))
       }
-    case "putImageBytes":
+
+    case "putImageBytes", "putVideoBytes":
       let args = call.arguments as! [String: Any]
       putMediaBytes(
         bytes: (args["bytes"] as! FlutterStandardTypedData).data,
         album: args["album"] as? String,
-        name: args["name"] as! String
+        name: args["name"] as! String,
+        isImage: call.method == "putImageBytes"
       ) { _, error in
         result(error == nil ? nil : self.handleError(error: error!))
       }
+
     case "open":
       open { result(nil) }
+
     case "hasAccess":
       let args = call.arguments as! [String: Bool]
       result(hasAccess(toAlbum: args["toAlbum"]!))
+
     case "requestAccess":
       let args = call.arguments as! [String: Bool]
       let toAlbum = args["toAlbum"]!
-
       hasAccess(toAlbum: toAlbum)
         ? result(true)
-        : requestAccess(
-          toAlbum: toAlbum,
-          completion: { granted in
-            result(granted)
-          }
-        )
+        : requestAccess(toAlbum: toAlbum) { granted in result(granted) }
+
     default:
       result(FlutterMethodNotImplemented)
     }
   }
 
   private func putMedia(
-    path: String, album: String?, isImage: Bool, completion: @escaping (Bool, Error?) -> Void
+    path: String, album: String?, isImage: Bool,
+    completion: @escaping (Bool, Error?) -> Void
   ) {
     let url = URL(fileURLWithPath: path)
+
     writeContent(
       assetChangeRequest: {
-        isImage
-          ? PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)!
-          : PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)!
-      }, album: album, completion: completion
+        let req: PHAssetChangeRequest =
+          isImage
+            ? PHAssetCreationRequest.creationRequestForAssetFromImage(atFileURL: url)!
+            : PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL: url)!
+
+        req.creationDate = Date()
+        return req
+      },
+      album: album,
+      completion: completion
     )
   }
 
   private func putMediaBytes(
-    bytes: Data, album: String?, name: String, completion: @escaping (Bool, Error?) -> Void
+    bytes: Data, album: String?, name: String,
+    isImage: Bool,
+    completion: @escaping (Bool, Error?) -> Void
   ) {
     writeContent(
       assetChangeRequest: {
         let request = PHAssetCreationRequest.forAsset()
-        request.creationDate = Date() //Modify date to current date to ensure latest in gallery
+        request.creationDate = Date()
+
         let options = PHAssetResourceCreationOptions()
         options.originalFilename = name
-        request.addResource(with: .photo, data: bytes, options: options)
+
+        let resourceType: PHAssetResourceType = isImage ? .photo : .video
+
+        request.addResource(with: resourceType, data: bytes, options: options)
         return request
-      }, album: album, completion: completion
+      },
+      album: album,
+      completion: completion
     )
   }
 
@@ -101,27 +118,38 @@ public class GalPlugin: NSObject, FlutterPlugin {
           completion(false, error)
           return
         }
+
         PHPhotoLibrary.shared().performChanges({
+          let assetReq = assetChangeRequest()
+          let placeholder = assetReq.placeholderForCreatedAsset!
+
           let albumChangeRequest = PHAssetCollectionChangeRequest(for: collection!)
-          albumChangeRequest!.addAssets(
-            [assetChangeRequest().placeholderForCreatedAsset!] as NSArray)
+          albumChangeRequest!.addAssets([placeholder] as NSArray)
         }, completionHandler: completion)
       }
       return
     }
-    PHPhotoLibrary.shared().performChanges({ _ = assetChangeRequest() }, completionHandler: completion)
+
+    PHPhotoLibrary.shared().performChanges({
+      _ = assetChangeRequest()
+    }, completionHandler: completion)
   }
 
   private func getAlbum(album: String, completion: @escaping (PHAssetCollection?, Error?) -> Void) {
     let fetchOptions = PHFetchOptions()
     fetchOptions.predicate = NSPredicate(format: "title = %@", album)
-    let collections: PHFetchResult = PHAssetCollection.fetchAssetCollections(
-      with: .album, subtype: .any, options: fetchOptions
+
+    let collections = PHAssetCollection.fetchAssetCollections(
+      with: .album,
+      subtype: .any,
+      options: fetchOptions
     )
+
     if let collection = collections.firstObject {
       completion(collection, nil)
       return
     }
+
     PHPhotoLibrary.shared().performChanges({
       PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: album)
     }, completionHandler: { success, error in
@@ -133,37 +161,34 @@ public class GalPlugin: NSObject, FlutterPlugin {
 
   private func open(completion: @escaping () -> Void) {
     #if os(iOS)
-      guard let url = URL(string: "photos-redirect://") else { return }
-      UIApplication.shared.open(url, options: [:]) { _ in completion() }
+    guard let url = URL(string: "photos-redirect://") else { return }
+    UIApplication.shared.open(url, options: [:]) { _ in completion() }
     #else
-      guard let url = URL(string: "photos://") else { return }
-      NSWorkspace.shared.open(url)
-      completion()
+    guard let url = URL(string: "photos://") else { return }
+    NSWorkspace.shared.open(url)
+    completion()
     #endif
   }
 
   private func hasAccess(toAlbum: Bool) -> Bool {
     if #available(iOS 14, macOS 11, *) {
       return toAlbum
-        ? PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized
-        || PHPhotoLibrary.authorizationStatus(for: .readWrite) == .limited
+        ? PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized ||
+          PHPhotoLibrary.authorizationStatus(for: .readWrite) == .limited
         : PHPhotoLibrary.authorizationStatus(for: .addOnly) == .authorized
     }
     return PHPhotoLibrary.authorizationStatus() == .authorized
   }
 
-  /// If permissions have already been granted or denied by the user,
-  /// returns the result immediately, without displaying a dialog.
-  /// See: https://qiita.com/fuziki/items/87a3a1a8e481a1546b38
   private func requestAccess(toAlbum: Bool, completion: @escaping (Bool) -> Void) {
     if #available(iOS 14, macOS 11, *) {
       PHPhotoLibrary.requestAuthorization(for: toAlbum ? .readWrite : .addOnly) { _ in
         completion(self.hasAccess(toAlbum: toAlbum))
       }
-      return
-    }
-    PHPhotoLibrary.requestAuthorization { _ in
-      completion(PHPhotoLibrary.authorizationStatus() == .authorized)
+    } else {
+      PHPhotoLibrary.requestAuthorization { _ in
+        completion(PHPhotoLibrary.authorizationStatus() == .authorized)
+      }
     }
   }
 
@@ -175,8 +200,8 @@ public class GalPlugin: NSObject, FlutterPlugin {
     switch PHErrorCode(rawValue: error.code) {
     case .accessRestricted, .accessUserDenied:
       return FlutterError(code: "ACCESS_DENIED", message: message, details: details)
-    case .identifierNotFound, .multipleIdentifiersFound, .requestNotSupportedForAsset,
-         .videoConversionFailed, .unsupportedVideoCodec:
+    case .identifierNotFound, .multipleIdentifiersFound,
+         .requestNotSupportedForAsset, .videoConversionFailed, .unsupportedVideoCodec:
       return FlutterError(code: "NOT_SUPPORTED_FORMAT", message: message, details: details)
     case .notEnoughSpace:
       return FlutterError(code: "NOT_ENOUGH_SPACE", message: message, details: details)
@@ -186,33 +211,13 @@ public class GalPlugin: NSObject, FlutterPlugin {
   }
 }
 
-/// Low iOS versions do not have an enum defined, so [rawValue] must be used.
-/// If [rawValue] is not defined either, no handle is possible.
-/// You can check Apple's documentation by replacing the [$caseName] of the following URL
-/// Some documents are not provided by Apple.
-/// https://developer.apple.com/documentation/photokit/phphotoserror/code/$caseName
 enum PHErrorCode: Int {
-  // [PHPhotosError.identifierNotFound]
   case identifierNotFound = 3201
-
-  // [PHPhotosError.multipleIdentifiersFound]
   case multipleIdentifiersFound = 3202
-
-  // Apple has not released documentation.
   case videoConversionFailed = 3300
-
-  // Apple has not released documentation.
   case unsupportedVideoCodec = 3302
-
-  // [PHPhotosError.notEnoughSpace]
   case notEnoughSpace = 3305
-
-  // [PHPhotosError.requestNotSupportedForAsset]
   case requestNotSupportedForAsset = 3306
-
-  // [PHPhotosError.accessRestricted]
   case accessRestricted = 3310
-
-  // [PHPhotosError.accessUserDenied]
   case accessUserDenied = 3311
 }
